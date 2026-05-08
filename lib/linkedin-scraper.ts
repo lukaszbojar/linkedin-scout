@@ -17,46 +17,20 @@ const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
 /**
- * Returns headers needed for LinkedIn's internal Voyager API.
- * LinkedIn requires a CSRF token that matches the JSESSIONID cookie value.
- * We obtain it by doing a lightweight GET to the homepage first.
+ * Build headers for LinkedIn Voyager API.
+ *
+ * IMPORTANT: We deliberately do NOT visit any LinkedIn HTML page from the
+ * server. Doing so from a Vercel IP (different country than the user) triggers
+ * LinkedIn's account-takeover detection and invalidates the li_at cookie.
+ *
+ * Read-only GET requests to Voyager JSON endpoints work fine with the static
+ * CSRF token "ajax:0" — LinkedIn only enforces real CSRF validation on
+ * mutating (POST/PUT/DELETE) calls.
  */
-async function buildHeaders(liAt: string): Promise<Record<string, string>> {
-  let jsessionid = 'ajax:0'
-
-  try {
-    const res = await fetch('https://www.linkedin.com/feed/', {
-      method: 'GET',
-      headers: {
-        Cookie: `li_at=${liAt}`,
-        'User-Agent': USER_AGENT,
-        Accept: 'text/html',
-      },
-      redirect: 'manual', // don't follow redirects — a 3xx to /login means expired
-    })
-
-    // If redirected to login, session is expired
-    if (res.status >= 300 && res.status < 400) {
-      const location = res.headers.get('location') || ''
-      if (location.includes('/login') || location.includes('/checkpoint')) {
-        throw new Error('SESSION_EXPIRED')
-      }
-    }
-
-    // Extract JSESSIONID from Set-Cookie
-    const setCookieRaw = res.headers.get('set-cookie') || ''
-    const match = setCookieRaw.match(/JSESSIONID=("ajax:[^"]+"|ajax:[^;]+)/)
-    if (match) {
-      jsessionid = match[1].replace(/"/g, '')
-    }
-  } catch (err) {
-    if ((err as Error).message === 'SESSION_EXPIRED') throw err
-    // Network error — continue with ajax:0 fallback
-  }
-
+function buildHeaders(liAt: string): Record<string, string> {
   return {
-    Cookie: `li_at=${liAt}; JSESSIONID=${jsessionid}`,
-    'Csrf-Token': jsessionid,
+    Cookie: `li_at=${liAt}; JSESSIONID=ajax:0`,
+    'Csrf-Token': 'ajax:0',
     'User-Agent': USER_AGENT,
     Accept: 'application/vnd.linkedin.normalized+json+2.1',
     'x-restli-protocol-version': '2.0.0',
@@ -64,6 +38,7 @@ async function buildHeaders(liAt: string): Promise<Record<string, string>> {
     'x-li-track': JSON.stringify({ clientVersion: '1.13.2491' }),
     'x-li-page-instance': 'urn:li:page:d_flagship3_feed;',
     Referer: 'https://www.linkedin.com/feed/',
+    Origin: 'https://www.linkedin.com',
   }
 }
 
@@ -74,7 +49,7 @@ async function buildHeaders(liAt: string): Promise<Record<string, string>> {
 export async function testLinkedInSession(encryptedCookie: string): Promise<boolean> {
   try {
     const liAt = decrypt(encryptedCookie)
-    const headers = await buildHeaders(liAt)
+    const headers = buildHeaders(liAt)
 
     const res = await fetch('https://www.linkedin.com/voyager/api/me', {
       headers,
@@ -208,7 +183,7 @@ export async function fetchLinkedInPosts(
   limit: number
 ): Promise<LinkedInPost[]> {
   const liAt = decrypt(encryptedCookie)
-  const headers = await buildHeaders(liAt)
+  const headers = buildHeaders(liAt)
 
   const now = new Date()
   const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)

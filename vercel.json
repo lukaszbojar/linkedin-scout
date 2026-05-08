@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/fetch-posts",
-      "schedule": "0 9,18 * * *"
+      "schedule": "0 9 * * *"
     },
     {
       "path": "/api/cron/sync-engagement",

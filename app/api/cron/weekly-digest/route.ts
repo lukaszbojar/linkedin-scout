@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { sendWeeklyDigest } from '@/lib/email'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   const users = await prisma.user.findMany()
   const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)

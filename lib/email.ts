@@ -1,7 +1,5 @@
 import { Resend } from 'resend'
 
-const resend = new Resend(process.env.RESEND_API_KEY)
-
 interface WeeklyDigestData {
   userName: string
   userEmail: string
@@ -102,6 +100,7 @@ export async function sendWeeklyDigest(data: WeeklyDigestData) {
 </body>
 </html>`
 
+  const resend = new Resend(process.env.RESEND_API_KEY)
   await resend.emails.send({
     from: 'LinkedIn Scout <onboarding@resend.dev>',
     to: userEmail,

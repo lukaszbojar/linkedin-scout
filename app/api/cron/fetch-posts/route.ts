@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { fetchLinkedInPosts } from '@/lib/linkedin-scraper'
+
+export const dynamic = 'force-dynamic'
 import { analyzePost } from '@/lib/ai'
 import { Resend } from 'resend'
 

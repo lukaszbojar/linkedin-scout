@@ -1,0 +1,65 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id                     String               @id @default(cuid())
+  email                  String               @unique
+  passwordHash           String
+  name                   String
+  linkedinSessionCookie  String?
+  linkedinUsername       String?
+  personalityPrompt      String?              @db.Text
+  dailyPostLimit         Int                  @default(5)
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+
+  posts                  Post[]
+  commentSuggestions     CommentSuggestion[]
+}
+
+model Post {
+  id              String   @id @default(cuid())
+  linkedinPostId  String   @unique
+  authorName      String
+  authorTitle     String
+  authorUrl       String?
+  content         String   @db.Text
+  postedAt        DateTime
+  fetchedAt       DateTime @default(now())
+  userId          String
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  suggestions     CommentSuggestion[]
+}
+
+enum CommentStatus {
+  PENDING
+  APPROVED
+  EDITED
+  SKIPPED
+}
+
+model CommentSuggestion {
+  id                 String        @id @default(cuid())
+  postId             String
+  userId             String
+  suggestedComment   String        @db.Text
+  finalComment       String?       @db.Text
+  score              Int
+  scoreReasoning     String        @db.Text
+  status             CommentStatus @default(PENDING)
+  publishedAt        DateTime?
+  linkedinCommentId  String?
+  reactions          Int           @default(0)
+  replies            Int           @default(0)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  post               Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user               User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}

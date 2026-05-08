@@ -11,7 +11,6 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.1",
     "@neondatabase/serverless": "^1.1.0",
-    "@playwright/browser-chromium": "^1.59.1",
     "@prisma/adapter-neon": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@types/papaparse": "^5.5.2",
@@ -23,7 +22,6 @@
     "lucide-react": "^1.14.0",
     "next": "14.2.35",
     "papaparse": "^5.5.3",
-    "playwright": "^1.59.1",
     "prisma": "^7.8.0",
     "react": "^18",
     "react-dom": "^18",

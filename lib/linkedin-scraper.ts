@@ -1,4 +1,3 @@
-import { chromium } from 'playwright'
 import { decrypt } from './crypto'
 
 export interface LinkedInPost {
@@ -10,211 +9,248 @@ export interface LinkedInPost {
   postedAt: Date
 }
 
-async function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+// ---------------------------------------------------------------------------
+// LinkedIn Voyager API helpers
+// ---------------------------------------------------------------------------
+
+const USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+
+/**
+ * Returns headers needed for LinkedIn's internal Voyager API.
+ * LinkedIn requires a CSRF token that matches the JSESSIONID cookie value.
+ * We obtain it by doing a lightweight GET to the homepage first.
+ */
+async function buildHeaders(liAt: string): Promise<Record<string, string>> {
+  let jsessionid = 'ajax:0'
+
+  try {
+    const res = await fetch('https://www.linkedin.com/feed/', {
+      method: 'GET',
+      headers: {
+        Cookie: `li_at=${liAt}`,
+        'User-Agent': USER_AGENT,
+        Accept: 'text/html',
+      },
+      redirect: 'manual', // don't follow redirects — a 3xx to /login means expired
+    })
+
+    // If redirected to login, session is expired
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location') || ''
+      if (location.includes('/login') || location.includes('/checkpoint')) {
+        throw new Error('SESSION_EXPIRED')
+      }
+    }
+
+    // Extract JSESSIONID from Set-Cookie
+    const setCookieRaw = res.headers.get('set-cookie') || ''
+    const match = setCookieRaw.match(/JSESSIONID=("ajax:[^"]+"|ajax:[^;]+)/)
+    if (match) {
+      jsessionid = match[1].replace(/"/g, '')
+    }
+  } catch (err) {
+    if ((err as Error).message === 'SESSION_EXPIRED') throw err
+    // Network error — continue with ajax:0 fallback
+  }
+
+  return {
+    Cookie: `li_at=${liAt}; JSESSIONID=${jsessionid}`,
+    'Csrf-Token': jsessionid,
+    'User-Agent': USER_AGENT,
+    Accept: 'application/vnd.linkedin.normalized+json+2.1',
+    'x-restli-protocol-version': '2.0.0',
+    'x-li-lang': 'en_US',
+    'x-li-track': JSON.stringify({ clientVersion: '1.13.2491' }),
+    'x-li-page-instance': 'urn:li:page:d_flagship3_feed;',
+    Referer: 'https://www.linkedin.com/feed/',
+  }
 }
 
+// ---------------------------------------------------------------------------
+// Session test
+// ---------------------------------------------------------------------------
+
 export async function testLinkedInSession(encryptedCookie: string): Promise<boolean> {
-  let browser = null
   try {
-    const cookie = decrypt(encryptedCookie)
-    browser = await chromium.launch({ headless: true })
-    const context = await browser.newContext({
-      userAgent:
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    const liAt = decrypt(encryptedCookie)
+    const headers = await buildHeaders(liAt)
+
+    const res = await fetch('https://www.linkedin.com/voyager/api/me', {
+      headers,
     })
-    await context.addCookies([
-      {
-        name: 'li_at',
-        value: cookie,
-        domain: '.linkedin.com',
-        path: '/',
-        httpOnly: true,
-        secure: true,
-      },
-    ])
-    const page = await context.newPage()
-    await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded', timeout: 15000 })
-    const url = page.url()
-    return !url.includes('/login') && !url.includes('/checkpoint')
+
+    return res.ok
   } catch (err) {
     console.error('LinkedIn session test failed:', err)
     return false
-  } finally {
-    if (browser) await browser.close()
   }
+}
+
+// ---------------------------------------------------------------------------
+// Feed post fetching via Voyager API
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyObj = Record<string, any>
+
+/** Safely get a nested string from an unknown object */
+function getString(obj: AnyObj, ...keys: string[]): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let cur: any = obj
+  for (const k of keys) {
+    if (cur == null || typeof cur !== 'object') return ''
+    cur = cur[k]
+  }
+  return typeof cur === 'string' ? cur : ''
+}
+
+/** Extract plain text from LinkedIn's annotated text objects */
+function extractText(textObj: AnyObj | null | undefined): string {
+  if (!textObj) return ''
+  // Some endpoints wrap it: { text: "...", ... }
+  const raw = getString(textObj, 'text')
+  if (raw) return raw
+  // Others: { $type: "...", text: { text: "..." } }
+  const nested = getString(textObj, 'text', 'text')
+  return nested
+}
+
+/**
+ * Parse a raw Voyager normalized-JSON response into post objects.
+ * LinkedIn returns a `data` wrapper + `included` array of all referenced
+ * entities. We find `Update` entities and resolve their actors / commentary.
+ */
+function parseVoyagerResponse(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  json: any,
+  now: Date,
+  oneDayAgo: Date
+): LinkedInPost[] {
+  const included: AnyObj[] = Array.isArray(json.included) ? json.included : []
+  const posts: LinkedInPost[] = []
+
+  for (const entity of included) {
+    if (typeof entity !== 'object' || entity === null) continue
+
+    const type: string = entity['$type'] || entity['entityUrn'] || ''
+    // We care about Update entities
+    const isUpdate =
+      type.includes('voyager.feed.Update') ||
+      type.includes('voyager.feed.render.UpdateV2') ||
+      typeof entity['commentary'] !== 'undefined' ||
+      typeof entity['resharedUpdate'] !== 'undefined'
+
+    if (!isUpdate) continue
+
+    // Post content — can live in commentary or resharedUpdate
+    const commentary: AnyObj = entity['commentary'] || {}
+    let content =
+      extractText(commentary['text']) ||
+      extractText(commentary) ||
+      extractText(entity['headerText']) ||
+      ''
+
+    // Some updates wrap content differently
+    if (!content && entity['updateMetadata']) {
+      content = extractText(entity['updateMetadata']['shareCommentary']?.['text'])
+    }
+
+    if (!content || content.length < 20) continue
+
+    // Author info
+    const actor: AnyObj = entity['actor'] || {}
+    const authorName =
+      extractText(actor['name']) || extractText(actor['title']) || 'Unknown'
+    if (authorName === 'Unknown') continue
+
+    const authorTitle =
+      extractText(actor['description']) ||
+      extractText(actor['subDescription']) ||
+      ''
+
+    const authorUrl: string = actor['navigationUrl'] || actor['url'] || ''
+
+    // Post ID — prefer URN-based ID
+    const urn: string =
+      entity['urn'] ||
+      entity['entityUrn'] ||
+      entity['updateMetadata']?.['urn'] ||
+      ''
+    const idMatch = urn.match(/:activity:(\d+)/)
+    const linkedinPostId = idMatch ? `urn:li:activity:${idMatch[1]}` : urn || Math.random().toString(36)
+
+    // Timestamp
+    const rawTs: number =
+      entity['publishedAt'] ||
+      entity['createdAt'] ||
+      entity['updateMetadata']?.['publishedAt'] ||
+      0
+    const postedAt = rawTs ? new Date(rawTs) : new Date(now.getTime() - 6 * 60 * 60 * 1000)
+
+    if (postedAt < oneDayAgo) continue
+
+    posts.push({
+      linkedinPostId,
+      authorName,
+      authorTitle,
+      authorUrl,
+      content: content.trim().slice(0, 3000),
+      postedAt,
+    })
+  }
+
+  return posts
 }
 
 export async function fetchLinkedInPosts(
   encryptedCookie: string,
   limit: number
 ): Promise<LinkedInPost[]> {
-  const cookie = decrypt(encryptedCookie)
-  const browser = await chromium.launch({ headless: true })
-  const posts: LinkedInPost[] = []
+  const liAt = decrypt(encryptedCookie)
+  const headers = await buildHeaders(liAt)
 
-  try {
-    const context = await browser.newContext({
-      userAgent:
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      viewport: { width: 1280, height: 900 },
-    })
+  const now = new Date()
+  const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
 
-    await context.addCookies([
-      {
-        name: 'li_at',
-        value: cookie,
-        domain: '.linkedin.com',
-        path: '/',
-        httpOnly: true,
-        secure: true,
-      },
-    ])
+  const allPosts: LinkedInPost[] = []
+  const seenIds = new Set<string>()
 
-    const page = await context.newPage()
-    await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'networkidle', timeout: 30000 })
+  // Paginate if needed — fetch up to 2 pages of 20
+  const pages = Math.ceil(limit / 20)
 
-    // Check if still logged in
-    const currentUrl = page.url()
-    if (currentUrl.includes('/login') || currentUrl.includes('/checkpoint')) {
+  for (let page = 0; page < pages && allPosts.length < limit; page++) {
+    const start = page * 20
+    const url =
+      `https://www.linkedin.com/voyager/api/feed/updatesV2` +
+      `?count=20&start=${start}&includeFilteredUpdates=true` +
+      `&q=chronFeed&sortOrder=RECENT`
+
+    const res = await fetch(url, { headers })
+
+    if (res.status === 401 || res.status === 403) {
       throw new Error('SESSION_EXPIRED')
     }
 
-    // Scroll to load more posts
-    for (let i = 0; i < 3; i++) {
-      await page.evaluate(() => window.scrollBy(0, 800))
-      await sleep(1500)
+    if (!res.ok) {
+      console.error(`Voyager feed returned ${res.status}`)
+      break
     }
 
-    // Multiple selector strategies for resilience
-    const postSelectors = [
-      'div[data-id^="urn:li:activity"]',
-      '.feed-shared-update-v2',
-      'div[data-urn^="urn:li:activity"]',
-      '.occludable-update',
-    ]
+    const json = await res.json()
+    const pagePosts = parseVoyagerResponse(json, now, oneDayAgo)
 
-    // Warm up selectors to ensure elements load before evaluate
-    for (const selector of postSelectors) {
-      try {
-        await page.waitForSelector(selector, { timeout: 5000 })
-        const elements = await page.$$(selector)
-        if (elements.length > 0) break
-      } catch {
-        continue
+    for (const p of pagePosts) {
+      if (!seenIds.has(p.linkedinPostId)) {
+        seenIds.add(p.linkedinPostId)
+        allPosts.push(p)
       }
     }
 
-    // Parse posts from page
-    const rawPosts = await page.evaluate((maxPosts) => {
-      const results: Array<{
-        id: string
-        authorName: string
-        authorTitle: string
-        authorUrl: string
-        content: string
-        timeAgo: string
-      }> = []
-
-      // Try various container selectors
-      const containers =
-        document.querySelectorAll('[data-id^="urn:li:activity"]') ||
-        document.querySelectorAll('.feed-shared-update-v2') ||
-        document.querySelectorAll('[data-urn^="urn:li:activity"]')
-
-      containers.forEach((container) => {
-        if (results.length >= maxPosts) return
-
-        try {
-          // Extract post ID
-          const id =
-            container.getAttribute('data-id') ||
-            container.getAttribute('data-urn') ||
-            Math.random().toString(36).substr(2, 9)
-
-          // Author name - multiple fallbacks
-          const authorEl =
-            container.querySelector('.update-components-actor__title span[aria-hidden="true"]') ||
-            container.querySelector('.feed-shared-actor__title') ||
-            container.querySelector('[data-anonymize="person-name"]') ||
-            container.querySelector('.update-components-actor__name')
-          const authorName = authorEl?.textContent?.trim() || 'Unknown Author'
-
-          // Author title - multiple fallbacks
-          const titleEl =
-            container.querySelector('.update-components-actor__description span[aria-hidden="true"]') ||
-            container.querySelector('.feed-shared-actor__description') ||
-            container.querySelector('[data-anonymize="headline"]') ||
-            container.querySelector('.update-components-actor__subtitle')
-          const authorTitle = titleEl?.textContent?.trim() || ''
-
-          // Author URL
-          const linkEl =
-            container.querySelector('a.update-components-actor__meta-link') ||
-            container.querySelector('.feed-shared-actor__container-link') ||
-            container.querySelector('a[data-tracking-control-name*="actor"]')
-          const authorUrl = linkEl?.getAttribute('href') || ''
-
-          // Post content - multiple fallbacks
-          const contentEl =
-            container.querySelector('.feed-shared-update-v2__description') ||
-            container.querySelector('.update-components-text') ||
-            container.querySelector('[data-test-id="main-feed-activity-card__commentary"]') ||
-            container.querySelector('.break-words')
-          const content = contentEl?.textContent?.trim() || ''
-
-          // Time
-          const timeEl =
-            container.querySelector('.update-components-actor__sub-description span[aria-hidden="true"]') ||
-            container.querySelector('time') ||
-            container.querySelector('.feed-shared-actor__sub-description')
-          const timeAgo = timeEl?.textContent?.trim() || ''
-
-          if (content && content.length > 20 && authorName !== 'Unknown Author') {
-            results.push({ id, authorName, authorTitle, authorUrl, content, timeAgo })
-          }
-        } catch {
-          // Skip malformed posts
-        }
-      })
-
-      return results
-    }, limit)
-
-    const now = new Date()
-
-    for (const raw of rawPosts.slice(0, limit)) {
-      const postedAt = parseTimeAgo(raw.timeAgo, now)
-      const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-
-      if (postedAt >= oneDayAgo) {
-        posts.push({
-          linkedinPostId: raw.id,
-          authorName: raw.authorName,
-          authorTitle: raw.authorTitle,
-          authorUrl: raw.authorUrl,
-          content: raw.content.slice(0, 3000),
-          postedAt,
-        })
-      }
-    }
-  } finally {
-    await browser.close()
+    // If we got fewer than 20 results, no point fetching more pages
+    const elements: unknown[] = Array.isArray(json.data?.elements) ? json.data.elements : []
+    if (elements.length < 20) break
   }
 
-  return posts
-}
-
-function parseTimeAgo(timeAgo: string, now: Date): Date {
-  const text = timeAgo.toLowerCase()
-  if (text.includes('just now') || text.includes('moment')) {
-    return new Date(now.getTime() - 5 * 60 * 1000)
-  }
-  const minuteMatch = text.match(/(\d+)\s*m/)
-  if (minuteMatch) return new Date(now.getTime() - parseInt(minuteMatch[1]) * 60 * 1000)
-  const hourMatch = text.match(/(\d+)\s*h/)
-  if (hourMatch) return new Date(now.getTime() - parseInt(hourMatch[1]) * 60 * 60 * 1000)
-  const dayMatch = text.match(/(\d+)\s*d/)
-  if (dayMatch) return new Date(now.getTime() - parseInt(dayMatch[1]) * 24 * 60 * 60 * 1000)
-  return new Date(now.getTime() - 12 * 60 * 60 * 1000)
+  return allPosts.slice(0, limit)
 }

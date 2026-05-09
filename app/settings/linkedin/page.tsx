@@ -140,14 +140,36 @@ export default function LinkedInSettingsPage() {
             <span className="flex-shrink-0 w-6 h-6 bg-blue-600 text-white rounded-full text-xs font-bold flex items-center justify-center">1</span>
             <div className="text-sm text-gray-700 dark:text-gray-300 mt-0.5">
               <p className="font-medium mb-1">Skopiuj kod bookmarkletu</p>
-              <p className="text-gray-500 dark:text-gray-400">Kliknij przycisk poniżej — kod trafi do schowka.</p>
+              <p className="text-gray-500 dark:text-gray-400">Kliknij przycisk poniżej &mdash; kod trafi do schowka.</p>
             </div>
           </li>
           <li className="flex gap-3">
             <span className="flex-shrink-0 w-6 h-6 bg-blue-600 text-white rounded-full text-xs font-bold flex items-center justify-center">2</span>
             <div className="text-sm text-gray-700 dark:text-gray-300 mt-0.5">
               <p className="font-medium mb-1">Dodaj zakładkę w przeglądarce</p>
-              <p className="text-gray-500 dark:text-gray-400">Chrome/Edge: otwórz Menedżer zakładek (Ctrl+Shift+O), kliknij &quot;Dodaj zakładkę&quot;, wklej skopiowany kod w polu <strong>URL</strong>, nazwij ją np. <em>LinkedIn Scout</em>.</p>
+
+              {/* Safari */}
+              <div className="mt-2 mb-3">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Safari (Mac)</p>
+                <ol className="space-y-1 text-gray-500 dark:text-gray-400">
+                  <li>1. Otwórz dowolną stronę i naciśnij <kbd className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-xs">⌘D</kbd> &mdash; dodaj zakładkę do <strong>Paska ulubionych</strong></li>
+                  <li>2. Otwórz menu <strong>Zakładki → Edytuj zakładki</strong> (<kbd className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-xs">⌥⌘B</kbd>)</li>
+                  <li>3. Znajdź właśnie dodaną zakładkę, kliknij ją dwukrotnie</li>
+                  <li>4. Zmień <strong>nazwę</strong> na <em>LinkedIn Scout</em>, a <strong>adres</strong> zastąp skopiowanym kodem</li>
+                  <li>5. Naciśnij <kbd className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-xs">Return</kbd></li>
+                </ol>
+              </div>
+
+              {/* Chrome / Edge */}
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Chrome / Edge (Mac &amp; Windows)</p>
+                <ol className="space-y-1 text-gray-500 dark:text-gray-400">
+                  <li>1. Otwórz Menedżer zakładek <kbd className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-xs">Ctrl/⌘+Shift+O</kbd></li>
+                  <li>2. Kliknij <strong>Dodaj zakładkę</strong> (⋮ &rarr; Dodaj nową zakładkę)</li>
+                  <li>3. Nazwij ją <em>LinkedIn Scout</em>, w polu <strong>URL</strong> wklej skopiowany kod</li>
+                  <li>4. Kliknij <strong>Zapisz</strong></li>
+                </ol>
+              </div>
             </div>
           </li>
           <li className="flex gap-3">

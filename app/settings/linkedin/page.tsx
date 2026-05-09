@@ -10,30 +10,33 @@ import { Network, ArrowLeft, Copy, Check, RefreshCw, BookOpen, AlertTriangle } f
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://linkedin-scout.vercel.app'
 
 function buildBookmarklet(token: string) {
-  // Minified JS that runs on linkedin.com, calls Voyager API, sends to our ingest endpoint
+  // Opens a small popup on OUR domain, then sends LinkedIn data via postMessage.
+  // This bypasses LinkedIn's Content Security Policy which blocks outgoing
+  // fetch() to external domains. postMessage is cross-origin by design and
+  // is NOT subject to connect-src CSP restrictions.
+  const importUrl = `${APP_URL}/import?token=${token}`
   const code = `(async()=>{
+    const pw=400,ph=320;
+    const pl=Math.round((screen.width-pw)/2),pt=Math.round((screen.height-ph)/2);
+    const w=window.open('${importUrl}','lk-scout','width='+pw+',height='+ph+',left='+pl+',top='+pt+',resizable=no');
+    if(!w){alert('LinkedIn Scout: zezwól na wyskakujące okienka dla linkedin.com i spróbuj ponownie.');return;}
     const c=document.cookie.match(/JSESSIONID=(?:"([^"]+)"|([^;]+))/);
     const csrf=c?(c[1]||c[2]).trim():'ajax:0';
-    const n=document.querySelector('.msg-overlay-list-bubble--is-minimized,.feed-shared-update-v2')||document.body;
     try{
       const r=await fetch('/voyager/api/feed/updatesV2?count=20&start=0&q=chronFeed&sortOrder=RECENT',{
         headers:{'Accept':'application/vnd.linkedin.normalized+json+2.1','x-restli-protocol-version':'2.0.0','Csrf-Token':csrf},
         credentials:'include'
       });
-      if(!r.ok){alert('LinkedIn Scout: błąd '+r.status+' — upewnij się, że jesteś zalogowany na LinkedIn');return;}
+      if(!r.ok){w.close();alert('LinkedIn Scout: błąd '+r.status+' — upewnij się, że jesteś zalogowany.');return;}
       const j=await r.json();
-      const s=await fetch('${APP_URL}/api/feed/ingest?token=${token}',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(j)
-      });
-      const rs=await s.json();
-      if(rs.suggestionsGenerated>0){alert('✅ LinkedIn Scout: '+rs.suggestionsGenerated+' nowych sugestii AI gotowych!');}
-      else if(rs.postsFound>0){alert('ℹ️ LinkedIn Scout: znaleziono '+rs.postsFound+' postów, ale wszystkie już przetworzone.');}
-      else{alert('ℹ️ LinkedIn Scout: brak nowych postów z ostatnich 24h.');}
-    }catch(e){alert('LinkedIn Scout: błąd — '+e.message);}
+      const target='${APP_URL}';
+      let n=0;
+      const iv=setInterval(()=>{
+        try{w.postMessage({type:'lk-scout',data:j},target);}catch(e){}
+        if(++n>=30)clearInterval(iv);
+      },200);
+    }catch(e){w&&w.close();alert('LinkedIn Scout: błąd — '+e.message);}
   })();`
-  // Collapse to single line for bookmarklet
   return 'javascript:' + code.replace(/\s*\n\s*/g, '').replace(/\s{2,}/g, ' ')
 }
 
@@ -176,7 +179,7 @@ export default function LinkedInSettingsPage() {
             <span className="flex-shrink-0 w-6 h-6 bg-blue-600 text-white rounded-full text-xs font-bold flex items-center justify-center">3</span>
             <div className="text-sm text-gray-700 dark:text-gray-300 mt-0.5">
               <p className="font-medium mb-1">Używaj codziennie</p>
-              <p className="text-gray-500 dark:text-gray-400">Wejdź na <strong>linkedin.com/feed</strong>, kliknij zakładkę &mdash; za kilka sekund pojawi się okienko z liczbą nowych sugestii. Wróć tutaj, żeby je przejrzeć.</p>
+              <p className="text-gray-500 dark:text-gray-400">Wejdź na <strong>linkedin.com/feed</strong>, kliknij zakładkę &mdash; otworzy się małe okienko LinkedIn Scout, które samo się zamknie po przetworzeniu. Wróć tutaj i odśwież Feed.</p>
             </div>
           </li>
         </ol>

@@ -37,6 +37,7 @@ export async function getAuthUser() {
       name: true,
       linkedinUsername: true,
       linkedinSessionCookie: true,
+      ingestToken: true,
       personalityPrompt: true,
       dailyPostLimit: true,
       createdAt: true,

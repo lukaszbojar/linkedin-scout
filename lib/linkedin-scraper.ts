@@ -96,7 +96,7 @@ function extractText(textObj: AnyObj | null | undefined): string {
  * LinkedIn returns a `data` wrapper + `included` array of all referenced
  * entities. We find `Update` entities and resolve their actors / commentary.
  */
-function parseVoyagerResponse(
+export function parseVoyagerResponse(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   json: any,
   now: Date,
